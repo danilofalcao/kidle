@@ -1,0 +1,16 @@
+[Unit]
+Description=KDE Plasma Idle Lock & DPMS Daemon
+After=plasmalogin.service
+Wants=plasmalogin.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/kidle --timeout 300
+Environment=G_MESSAGES_DEBUG=kidle
+StandardOutput=journal
+StandardError=journal
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
