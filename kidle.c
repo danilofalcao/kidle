@@ -112,20 +112,37 @@ static gboolean dpms_on(void)
 
 static gboolean lock_screen(void)
 {
-	if (!screensaver_proxy) {
-		log_info("kidle: no screensaver proxy, skipping lock");
-		return FALSE;
+	if (screensaver_proxy) {
+		GError *error = NULL;
+		GVariant *result = g_dbus_proxy_call_sync(screensaver_proxy,
+			"Lock", NULL, G_DBUS_CALL_FLAGS_NONE, -1, NULL, &error);
+		if (!result) {
+			log_info("kidle: failed to lock screen via KWin: %s", error->message);
+			g_error_free(error);
+		} else {
+			g_variant_unref(result);
+			return TRUE;
+		}
 	}
 
+	gint wait_status = 0;
 	GError *error = NULL;
-	GVariant *result = g_dbus_proxy_call_sync(screensaver_proxy,
-		"Lock", NULL, G_DBUS_CALL_FLAGS_NONE, -1, NULL, &error);
-	if (!result) {
-		log_info("kidle: failed to lock screen: %s", error->message);
+	char *argv[] = { "loginctl", "lock-sessions", NULL };
+
+	if (!g_spawn_sync(NULL, argv, NULL, G_SPAWN_SEARCH_PATH,
+		NULL, NULL, NULL, NULL, &wait_status, &error)) {
+		log_info("kidle: failed to run loginctl: %s", error->message);
 		g_error_free(error);
 		return FALSE;
 	}
-	g_variant_unref(result);
+
+	if (!g_spawn_check_wait_status(wait_status, &error)) {
+		log_info("kidle: loginctl failed: %s", error->message);
+		g_error_free(error);
+		return FALSE;
+	}
+
+	log_info("kidle: locked via loginctl");
 	return TRUE;
 }
 
@@ -137,7 +154,7 @@ static gboolean dpms_off_cb(G_GNUC_UNUSED gpointer data)
 
 static gboolean do_lock_and_off(void)
 {
-	if (!locked && screensaver_proxy) {
+	if (!locked) {
 		log_info("kidle: locking screen");
 		lock_screen();
 		locked = TRUE;
@@ -209,10 +226,11 @@ static void on_screensaver_active_changed(G_GNUC_UNUSED GDBusProxy *proxy,
 					screen_off = TRUE;
 			}
 		} else {
-			log_info("kidle: screensaver deactivated, restoring screens");
+			log_info("kidle: screensaver deactivated, letting PowerDevil restore screens");
 			locked = FALSE;
 			screen_off = FALSE;
-			dpms_on();
+			if (!screensaver_proxy)
+				dpms_on();
 			update_activity();
 		}
 	}
@@ -228,7 +246,7 @@ static gboolean on_input_readable(GIOChannel *source,
 	while (read(fd, &ev, sizeof(ev)) == sizeof(ev)) {
 		if (ev.type == EV_KEY || ev.type == EV_REL || ev.type == EV_ABS) {
 			update_activity();
-			if (screen_off)
+			if (screen_off && !screensaver_proxy)
 				dpms_on();
 			break;
 		}
