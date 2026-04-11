@@ -1,0 +1,6 @@
+kidle
+kidle-debug-*
+*.pkg.tar.zst
+pkg/
+src/
+.SRCINFO
