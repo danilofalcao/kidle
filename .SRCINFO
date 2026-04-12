@@ -1,7 +1,7 @@
 pkgbase = kidle
 	pkgdesc = KDE Plasma Wayland idle lock & DPMS daemon - works around screen-off bug
 	pkgver = 0.2.1
-	pkgrel = 3
+	pkgrel = 7
 	url = https://github.com/danilofalcao/kidle
 	install = kidle.install
 	arch = x86_64
@@ -12,13 +12,7 @@ pkgbase = kidle
 	depends = glib2
 	depends = kscreen
 	depends = kwin
-	source = kidle.c
-	source = Makefile
-	source = kidle.service
-	source = LICENSE
-	sha256sums = SKIP
-	sha256sums = SKIP
-	sha256sums = SKIP
+	source = kidle-0.2.1.tar.gz::https://github.com/danilofalcao/kidle/archive/v0.2.1.tar.gz
 	sha256sums = SKIP
 
 pkgname = kidle
