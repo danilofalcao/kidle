@@ -21,9 +21,9 @@ kidle works around the bug by implementing its own idle detection and screen con
 
 2. **Lock delay** — By default, the screen turns off immediately on idle, but the lock is delayed by 60 seconds. This gives you a window to wake the screen with a keypress or mouse movement without needing to enter your password. If you stay away for the full 60 seconds, the screen locks via `loginctl lock-sessions`.
 
-3. **Session-aware operation** — Runs as a system service (root). Automatically discovers the active display session (greeter or user) by scanning `/run/user/` directories. Sets `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, and `QT_QPA_PLATFORM=wayland` environment variables so `kscreen-doctor` can reach KWin regardless of whether the greeter or user session is active.
+3. **Session-aware operation** — Runs as a system service (root). Automatically discovers the active display session (greeter or user) by scanning `/run/user/` directories. Sets `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, and `QT_QPA_PLATFORM=wayland` environment variables so `kscreen-doctor` can reach KWin regardless of whether the greeter or user session is active. Since kidle runs as root, it cannot connect to user session DBus — it relies on `loginctl lock-sessions` for locking and `kscreen-doctor` for screen control through the Wayland display directly.
 
-4. **Greeter screen support** — On the plasmalogin greeter screen where no user session exists, kidle falls back to `loginctl lock-sessions` for locking and `kscreen-doctor --dpms off` for screen control. When a user is logged in, PowerDevil handles turning screens back on — kidle only forces them off.
+4. **Activity detection** — When a keypress or mouse movement is detected while the screen is off, kidle wakes the display via `kscreen-doctor --dpms on` (on the greeter screen) or lets PowerDevil handle it (when a user is logged in). Any activity during the lock delay window cancels the pending lock and restores the screen without requiring a password.
 
 ## Installation
 
