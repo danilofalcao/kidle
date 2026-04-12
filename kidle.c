@@ -19,9 +19,11 @@
 #define MAX_INPUT_DEVS 64
 
 static guint idle_timeout = IDLE_TIMEOUT_DEFAULT;
+static guint lock_delay = 60;
 static gboolean debug_mode = FALSE;
 static gboolean screen_off = FALSE;
 static gboolean locked = FALSE;
+static guint lock_timer_id = 0;
 static GMainLoop *loop = NULL;
 static GDBusProxy *screensaver_proxy = NULL;
 static gchar *active_bus_address = NULL;
@@ -53,6 +55,16 @@ static void log_info(const char *fmt, ...)
 	va_end(ap);
 }
 
+static gboolean lock_screen(void);
+
+static gboolean lock_delay_cb(G_GNUC_UNUSED gpointer data)
+{
+	log_info("kidle: lock delay expired, locking screen");
+	lock_screen();
+	lock_timer_id = 0;
+	return G_SOURCE_REMOVE;
+}
+
 static void update_activity(void)
 {
 	last_activity_time = g_get_monotonic_time() / 1000;
@@ -60,6 +72,11 @@ static void update_activity(void)
 		log_info("kidle: user activity detected, resetting state");
 		locked = FALSE;
 		screen_off = FALSE;
+	}
+	if (lock_timer_id) {
+		g_source_remove(lock_timer_id);
+		lock_timer_id = 0;
+		log_info("kidle: lock delay cancelled by activity");
 	}
 }
 
@@ -146,24 +163,23 @@ static gboolean lock_screen(void)
 	return TRUE;
 }
 
-static gboolean dpms_off_cb(G_GNUC_UNUSED gpointer data)
-{
-	dpms_off();
-	return G_SOURCE_REMOVE;
-}
-
 static gboolean do_lock_and_off(void)
 {
-	if (!locked) {
-		log_info("kidle: locking screen");
-		lock_screen();
-		locked = TRUE;
-		g_timeout_add_seconds(1, dpms_off_cb, NULL);
-	}
-
 	if (!screen_off) {
 		if (dpms_off())
 			screen_off = TRUE;
+	}
+
+	if (!locked && !lock_timer_id) {
+		if (lock_delay > 0) {
+			log_info("kidle: screens off, lock in %ds", lock_delay);
+			lock_timer_id = g_timeout_add_seconds(lock_delay, lock_delay_cb, NULL);
+			locked = FALSE;
+		} else {
+			log_info("kidle: locking screen immediately");
+			lock_screen();
+			locked = TRUE;
+		}
 	}
 
 	return TRUE;
@@ -183,12 +199,20 @@ static gboolean on_idle_check(G_GNUC_UNUSED gpointer user_data)
 		}
 
 		if (is_active) {
-			if (!locked)
-				locked = TRUE;
 			if (!screen_off) {
 				log_info("kidle: screensaver active, forcing DPMS off");
 				if (dpms_off())
 					screen_off = TRUE;
+			}
+			if (!locked && !lock_timer_id) {
+				if (lock_delay > 0) {
+					log_info("kidle: screensaver active, lock in %ds", lock_delay);
+					lock_timer_id = g_timeout_add_seconds(lock_delay, lock_delay_cb, NULL);
+				} else {
+					log_info("kidle: screensaver active, locking immediately");
+					lock_screen();
+					locked = TRUE;
+				}
 			}
 			return G_SOURCE_CONTINUE;
 		}
@@ -197,7 +221,7 @@ static gboolean on_idle_check(G_GNUC_UNUSED gpointer user_data)
 	gint64 now = g_get_monotonic_time() / 1000;
 	gint64 idle_ms = now - last_activity_time;
 
-	if (idle_ms >= (gint64)idle_timeout * 1000 && !locked) {
+	if (idle_ms >= (gint64)idle_timeout * 1000 && !locked && !lock_timer_id) {
 		log_info("kidle: idle for %llds (timeout %ds), locking and turning off",
 			(long long)(idle_ms / 1000), idle_timeout);
 		do_lock_and_off();
@@ -220,15 +244,29 @@ static void on_screensaver_active_changed(G_GNUC_UNUSED GDBusProxy *proxy,
 	if (g_variant_dict_lookup(&dict, "Active", "b", &active)) {
 		if (active) {
 			log_info("kidle: screensaver activated, forcing DPMS off");
-			locked = TRUE;
 			if (!screen_off) {
 				if (dpms_off())
 					screen_off = TRUE;
+			}
+			if (!locked && !lock_timer_id) {
+				if (lock_delay > 0) {
+					log_info("kidle: screensaver active, lock in %ds", lock_delay);
+					lock_timer_id = g_timeout_add_seconds(lock_delay, lock_delay_cb, NULL);
+				} else {
+					log_info("kidle: screensaver active, locking immediately");
+					lock_screen();
+					locked = TRUE;
+				}
 			}
 		} else {
 			log_info("kidle: screensaver deactivated, letting PowerDevil restore screens");
 			locked = FALSE;
 			screen_off = FALSE;
+			if (lock_timer_id) {
+				g_source_remove(lock_timer_id);
+				lock_timer_id = 0;
+				log_info("kidle: lock delay cancelled");
+			}
 			if (!screensaver_proxy)
 				dpms_on();
 			update_activity();
@@ -387,29 +425,14 @@ static gboolean find_active_session_bus(void)
 			found_greeter = TRUE;
 			log_info("kidle: found greeter session uid=%s", runtime_dir);
 		} else if (is_regular && !found_user) {
-			gchar *user_bus = g_strdup_printf("unix:path=%s", bus_path);
-			GDBusConnection *test_conn = g_dbus_connection_new_for_address_sync(
-				user_bus,
-				G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT |
-				G_DBUS_CONNECTION_FLAGS_MESSAGE_BUS_CONNECTION,
-				NULL, NULL, NULL);
-			if (test_conn) {
-				g_object_unref(test_conn);
-				if (!found_greeter) {
-					g_free(active_bus_address);
-					g_free(active_runtime);
-					g_free(active_wayland);
-					active_bus_address = user_bus;
-					active_runtime = g_strdup(runtime_path);
-					active_wayland = g_strdup("wayland-0");
-					best_uid = (guint32)uid;
-					found_user = TRUE;
-					log_info("kidle: found user session uid=%s", runtime_dir);
-				}
-			} else {
-				g_free(user_bus);
-				log_info("kidle: cannot connect to user session uid=%s bus", runtime_dir);
+			if (!found_greeter) {
+				active_bus_address = g_strdup_printf("unix:path=%s", bus_path);
+				active_runtime = g_strdup(runtime_path);
+				active_wayland = g_strdup("wayland-0");
+				best_uid = (guint32)uid;
 			}
+			found_user = TRUE;
+			log_info("kidle: found user session uid=%s", runtime_dir);
 		}
 
 		g_free(bus_path);
@@ -419,6 +442,12 @@ static gboolean find_active_session_bus(void)
 
 	if (active_bus_address) {
 		log_info("kidle: using session bus=%s", active_bus_address);
+		return TRUE;
+	}
+
+	if (active_runtime) {
+		log_info("kidle: no session bus, using runtime=%s wayland=%s",
+			active_runtime, active_wayland ? active_wayland : "(null)");
 		return TRUE;
 	}
 
@@ -449,36 +478,40 @@ static void connect_screensaver(void)
 	if (!active_bus_address)
 		return;
 
-	GError *error = NULL;
-	GDBusConnection *conn = g_dbus_connection_new_for_address_sync(
-		active_bus_address,
-		G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT |
-		G_DBUS_CONNECTION_FLAGS_MESSAGE_BUS_CONNECTION,
-		NULL, NULL, &error);
-	if (!conn) {
-		log_info("kidle: failed to connect to session bus: %s", error->message);
-		g_error_free(error);
-		return;
-	}
+	if (geteuid() != 0) {
+		GError *error = NULL;
+		GDBusConnection *conn = g_dbus_connection_new_for_address_sync(
+			active_bus_address,
+			G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT |
+			G_DBUS_CONNECTION_FLAGS_MESSAGE_BUS_CONNECTION,
+			NULL, NULL, &error);
+		if (!conn) {
+			log_info("kidle: failed to connect to session bus: %s", error->message);
+			g_error_free(error);
+			return;
+		}
 
-	if (screensaver_proxy)
-		g_object_unref(screensaver_proxy);
+		if (screensaver_proxy)
+			g_object_unref(screensaver_proxy);
 
-	screensaver_proxy = g_dbus_proxy_new_sync(conn,
-		G_DBUS_PROXY_FLAGS_NONE, NULL,
-		"org.kde.KWin", "/ScreenSaver",
-		"org.freedesktop.ScreenSaver", NULL, &error);
-	if (!screensaver_proxy) {
-		log_info("kidle: failed to connect to KWin ScreenSaver: %s", error->message);
-		g_error_free(error);
+		screensaver_proxy = g_dbus_proxy_new_sync(conn,
+			G_DBUS_PROXY_FLAGS_NONE, NULL,
+			"org.kde.KWin", "/ScreenSaver",
+			"org.freedesktop.ScreenSaver", NULL, &error);
+		if (!screensaver_proxy) {
+			log_info("kidle: failed to connect to KWin ScreenSaver: %s", error->message);
+			g_error_free(error);
+			g_object_unref(conn);
+			return;
+		}
+
+		g_signal_connect(screensaver_proxy, "g-properties-changed",
+			G_CALLBACK(on_screensaver_active_changed), NULL);
+		log_info("kidle: connected to KWin ScreenSaver on %s", active_bus_address);
 		g_object_unref(conn);
-		return;
+	} else {
+		log_info("kidle: running as root, skipping KWin ScreenSaver connection");
 	}
-
-	g_signal_connect(screensaver_proxy, "g-properties-changed",
-		G_CALLBACK(on_screensaver_active_changed), NULL);
-	log_info("kidle: connected to KWin ScreenSaver on %s", active_bus_address);
-	g_object_unref(conn);
 }
 
 static void on_login_session_changed(G_GNUC_UNUSED GDBusProxy *proxy,
@@ -547,6 +580,8 @@ static void sig_handler(int sig)
 static GOptionEntry cli_entries[] = {
 	{ "timeout", 't', 0, G_OPTION_ARG_INT, &idle_timeout,
 		"Idle timeout in seconds (default: 300)", "SECS" },
+	{ "lock-delay", 'l', 0, G_OPTION_ARG_INT, &lock_delay,
+		"Delay before locking after screens off in seconds (default: 60, 0=immediate)", "SECS" },
 	{ "debug", 'd', 0, G_OPTION_ARG_NONE, &debug_mode,
 		"Enable debug output", NULL },
 	{ NULL }
@@ -572,7 +607,7 @@ int main(int argc, char **argv)
 		idle_timeout = 10;
 	}
 
-	log_info("kidle: starting with timeout=%ds", idle_timeout);
+	log_info("kidle: starting with timeout=%ds lock-delay=%ds", idle_timeout, lock_delay);
 
 	if (!setup_dbus()) {
 		fprintf(stderr, "kidle: failed to initialize\n");
