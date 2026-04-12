@@ -4,11 +4,11 @@ KDE Plasma Wayland idle screen lock & DPMS daemon.
 
 ## The Problem
 
-On KDE Plasma 6 running on Wayland, screens don't turn off after the first lock. The built-in DPMS (Display Power Management Signaling) stops functioning once the screen locker activates. This is particularly damaging for OLED displays, which suffer burn-in when left on with static content.
+On KDE Plasma 6 running on Wayland, screens don't turn off before the first lock. The built-in DPMS (Display Power Management Signaling) never triggers from idle. This is particularly damaging for OLED displays, which suffer burn-in when left on with static content.
 
 The bug manifests in two scenarios:
 
-1. **After first lock** — Plasma's screen locker activates, but DPMS never triggers. The screen stays on indefinitely.
+1. **Before first lock** — Plasma's idle timeout never turns off the display. The screen stays on indefinitely until you manually lock.
 2. **At the login/greeter screen** — plasmalogin shows the greeter, but no idle timeout turns off the display.
 
 This is a known Plasma Wayland bug. KWin's `org.freedesktop.ScreenSaver.GetSessionIdleTime` returns 0 on Wayland (unsupported), and logind's `IdleHint` is never set by Plasma. The standard DPMS pipeline is broken.
@@ -73,7 +73,7 @@ sudo systemctl restart kidle
 
 | | Plasma DPMS | kidle |
 |---|---|---|
-| Works after first lock | No (broken on Wayland) | Yes |
+| Works before first lock | No (broken on Wayland) | Yes |
 | Works at login screen | No | Yes |
 | Idle detection method | KWin (broken on Wayland) | `/dev/input` + logind |
 | Screen off mechanism | KWin DPMS (broken) | `kscreen-doctor --dpms off` |
