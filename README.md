@@ -17,13 +17,13 @@ This is a known Plasma Wayland bug. KWin's `org.freedesktop.ScreenSaver.GetSessi
 
 kidle works around the bug by implementing its own idle detection and screen control:
 
-1. **Input device monitoring** — Reads `/dev/input/event*` devices directly to track keyboard and mouse activity. Tracks last activity time and triggers the lock + DPMS off after the configured timeout (default: 300s / 5 minutes).
+1. **Input device monitoring** — Reads `/dev/input/event*` devices directly to track keyboard and mouse activity. After the configured idle timeout (default: 300s / 5 minutes), screens turn off via `kscreen-doctor --dpms off`.
 
-2. **KWin ScreenSaver integration** — When running under an active user session, connects to `org.kde.KWin /ScreenSaver` on the session bus to detect when the screen locker activates. Immediately forces `kscreen-doctor --dpms off` to work around the broken DPMS pipeline. Also detects unlock to restore the display.
+2. **Lock delay** — By default, the screen turns off immediately on idle, but the lock is delayed by 60 seconds. This gives you a window to wake the screen with a keypress or mouse movement without needing to enter your password. If you stay away for the full 60 seconds, the screen locks via `loginctl lock-sessions`.
 
-3. **Session-aware operation** — Runs as a system service (root). Automatically discovers the active display session (greeter or user) by scanning `/run/user/` for session buses. Sets `DBUS_SESSION_BUS_ADDRESS`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, and `QT_QPA_PLATFORM=wayland` environment variables so `kscreen-doctor` can reach KWin regardless of whether the greeter or user session is active.
+3. **Session-aware operation** — Runs as a system service (root). Automatically discovers the active display session (greeter or user) by scanning `/run/user/` directories. Sets `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, and `QT_QPA_PLATFORM=wayland` environment variables so `kscreen-doctor` can reach KWin regardless of whether the greeter or user session is active.
 
-4. **logind monitoring** — Watches for session changes via `org.freedesktop.login1.Manager` properties. When a user logs in or the session switches, kidle reconnects to the appropriate bus.
+4. **Greeter screen support** — On the plasmalogin greeter screen where no user session exists, kidle falls back to `loginctl lock-sessions` for locking and `kscreen-doctor --dpms off` for screen control. When a user is logged in, PowerDevil handles turning screens back on — kidle only forces them off.
 
 ## Installation
 
@@ -47,12 +47,12 @@ sudo pacman -U kidle-*.pkg.tar.zst
 sudo systemctl enable --now kidle
 ```
 
-The default idle timeout is 300 seconds (5 minutes). To customize:
+The default idle timeout is 300 seconds (5 minutes) with a 60-second lock delay. To customize:
 
 Edit `/usr/lib/systemd/system/kidle.service` and modify the `ExecStart` line:
 
 ```
-ExecStart=/usr/bin/kidle --timeout 600
+ExecStart=/usr/bin/kidle --timeout 600 --lock-delay 120
 ```
 
 Then reload and restart:
@@ -66,7 +66,8 @@ sudo systemctl restart kidle
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `-t, --timeout=SECS` | 300 | Idle timeout in seconds (minimum: 10) |
+| `-t, --timeout=SECS` | 300 | Idle timeout in seconds before screens turn off (minimum: 10) |
+| `-l, --lock-delay=SECS` | 60 | Delay between screens off and screen lock (0 = immediate) |
 | `-d, --debug` | off | Enable debug output |
 
 ## How It Differs from Plasma's Built-in DPMS
@@ -75,8 +76,10 @@ sudo systemctl restart kidle
 |---|---|---|
 | Works before first lock | No (broken on Wayland) | Yes |
 | Works at login screen | No | Yes |
-| Idle detection method | KWin (broken on Wayland) | `/dev/input` + logind |
+| Idle detection method | KWin (broken on Wayland) | `/dev/input` direct |
 | Screen off mechanism | KWin DPMS (broken) | `kscreen-doctor --dpms off` |
+| Lock mechanism | KWin locker | `loginctl lock-sessions` |
+| Separate lock delay | No | Yes (default: 60s) |
 | Runs as | User session | System service |
 
 ## Requirements
