@@ -1,6 +1,21 @@
+# Build artifacts
 kidle
-kidle-debug-*
+*.o
+
+# Package files
 *.pkg.tar.zst
+*.pkg.tar.xz
+kidle-*.src.tar.gz
+
+# makepkg directories
 pkg/
 src/
+
+# AUR
 .SRCINFO
+
+# Temporary files
+*~
+*.swp
+*.swo
+.DS_Store

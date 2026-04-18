@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
+#include <sys/socket.h>
 #include <stdarg.h>
 #include <fcntl.h>
 #include <dirent.h>
@@ -35,6 +36,8 @@ static int num_input_fds = 0;
 static GIOChannel *io_channels[MAX_INPUT_DEVS];
 static guint io_watches[MAX_INPUT_DEVS];
 static guint retry_source = 0;
+static GDBusProxy *logind_manager_proxy = NULL;
+static gint inhibit_fd = -1;
 
 static void log_debug(const char *fmt, ...) G_GNUC_UNUSED;
 static void log_debug(const char *fmt, ...)
@@ -127,6 +130,50 @@ static gboolean dpms_on(void)
 	return run_kscreen_doctor("on");
 }
 
+static gboolean lock_screen(void);
+
+static void inhibit_suspend(void)
+{
+	if (inhibit_fd >= 0)
+		return;
+	if (!logind_manager_proxy)
+		return;
+
+	GError *error = NULL;
+	GVariant *result = g_dbus_proxy_call_sync(logind_manager_proxy,
+		"Inhibit",
+		g_variant_new("(ssss)",
+			"sleep",
+			"kidle",
+			"Desktop idle management - preventing suspend",
+			"block"),
+		G_DBUS_CALL_FLAGS_NONE,
+		-1, NULL, &error);
+
+	if (!result) {
+		log_info("kidle: failed to inhibit suspend: %s", error->message);
+		g_error_free(error);
+		return;
+	}
+
+	/* Inhibit returns a file descriptor handle directly */
+	gint32 fd = g_variant_get_handle(result);
+	if (fd >= 0) {
+		inhibit_fd = dup(fd);
+		log_info("kidle: inhibited system sleep/suspend");
+	}
+	g_variant_unref(result);
+}
+
+static void uninhibit_suspend(void)
+{
+	if (inhibit_fd >= 0) {
+		close(inhibit_fd);
+		inhibit_fd = -1;
+		log_info("kidle: released suspend inhibition");
+	}
+}
+
 static gboolean lock_screen(void)
 {
 	if (screensaver_proxy) {
@@ -165,6 +212,8 @@ static gboolean lock_screen(void)
 
 static gboolean do_lock_and_off(void)
 {
+	inhibit_suspend();
+
 	if (!screen_off) {
 		if (dpms_off())
 			screen_off = TRUE;
@@ -537,19 +586,22 @@ static gboolean setup_dbus(void)
 	connect_screensaver();
 
 	GError *error = NULL;
-	GDBusProxy *logind_proxy = g_dbus_proxy_new_for_bus_sync(G_BUS_TYPE_SYSTEM,
+	logind_manager_proxy = g_dbus_proxy_new_for_bus_sync(G_BUS_TYPE_SYSTEM,
 		G_DBUS_PROXY_FLAGS_NONE, NULL,
 		"org.freedesktop.login1",
 		"/org/freedesktop/login1",
 		"org.freedesktop.login1.Manager", NULL, &error);
-	if (logind_proxy) {
-		g_signal_connect(logind_proxy, "g-properties-changed",
+	if (logind_manager_proxy) {
+		g_signal_connect(logind_manager_proxy, "g-properties-changed",
 			G_CALLBACK(on_login_session_changed), NULL);
 		log_info("kidle: monitoring logind for session changes");
 	} else {
 		log_info("kidle: failed to connect to logind: %s", error->message);
 		g_error_free(error);
 	}
+
+	/* Inhibit suspend immediately on startup since we're managing idle */
+	inhibit_suspend();
 
 	if (!active_bus_address) {
 		log_info("kidle: no session found yet, will retry every 10s");
@@ -561,9 +613,12 @@ static gboolean setup_dbus(void)
 
 static void cleanup(void)
 {
+	uninhibit_suspend();
 	close_input_devices();
 	if (screensaver_proxy)
 		g_object_unref(screensaver_proxy);
+	if (logind_manager_proxy)
+		g_object_unref(logind_manager_proxy);
 	if (loop)
 		g_main_loop_unref(loop);
 	g_free(active_bus_address);
