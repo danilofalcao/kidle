@@ -1,7 +1,7 @@
 # Maintainer: Danilo Falcão <danilo@falcao.org>
 pkgname=kidle
-pkgver=0.2.1
-pkgrel=9
+pkgver=0.2.2
+pkgrel=1
 pkgdesc="KDE Plasma Wayland idle lock & DPMS daemon - works around screen-off bug and inhibits suspend on desktops"
 arch=('x86_64')
 url="https://github.com/danilofalcao/kidle"
