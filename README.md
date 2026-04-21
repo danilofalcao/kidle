@@ -17,7 +17,7 @@ This is a known Plasma Wayland bug. KWin's `org.freedesktop.ScreenSaver.GetSessi
 
 kidle works around the bug by implementing its own idle detection and screen control:
 
-1. **Input device monitoring** — Reads `/dev/input/event*` devices directly to track keyboard and mouse activity. After the configured idle timeout (default: 300s / 5 minutes), screens turn off via `kscreen-doctor --dpms off`.
+1. **Input device monitoring** — Reads `/dev/input/event*` devices directly to track keyboard and mouse activity. After the configured idle timeout (default: 900s / 15 minutes), screens turn off via `kscreen-doctor --dpms off`.
 
 2. **Lock delay** — By default, the screen turns off immediately on idle, but the lock is delayed by 60 seconds. This gives you a window to wake the screen with a keypress or mouse movement without needing to enter your password. If you stay away for the full 60 seconds, the screen locks via `loginctl lock-sessions`.
 
@@ -47,12 +47,18 @@ sudo pacman -U kidle-*.pkg.tar.zst
 sudo systemctl enable --now kidle
 ```
 
-The default idle timeout is 300 seconds (5 minutes) with a 60-second lock delay. To customize:
-
-Edit `/usr/lib/systemd/system/kidle.service` and modify the `ExecStart` line:
+The default idle timeout is 900 seconds (15 minutes) with a 60-second lock delay. To customize, use a systemd override:
 
 ```
-ExecStart=/usr/bin/kidle --timeout 600 --lock-delay 120
+sudo systemctl edit kidle
+```
+
+Add an override:
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/usr/bin/kidle --timeout 600 --lock-delay 60
 ```
 
 Then reload and restart:
@@ -66,7 +72,7 @@ sudo systemctl restart kidle
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `-t, --timeout=SECS` | 300 | Idle timeout in seconds before screens turn off (minimum: 10) |
+| `-t, --timeout=SECS` | 900 | Idle timeout in seconds before screens turn off (minimum: 10) |
 | `-l, --lock-delay=SECS` | 60 | Delay between screens off and screen lock (0 = immediate) |
 | `-d, --debug` | off | Enable debug output |
 

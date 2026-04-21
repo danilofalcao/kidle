@@ -5,7 +5,7 @@ Wants=plasmalogin.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/kidle --timeout 300 --lock-delay 60
+ExecStart=/usr/bin/kidle --timeout 900 --lock-delay 60
 Environment=G_MESSAGES_DEBUG=kidle
 StandardOutput=journal
 StandardError=journal

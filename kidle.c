@@ -15,7 +15,7 @@
 #include <glib.h>
 #include <gio/gio.h>
 
-#define IDLE_TIMEOUT_DEFAULT 300
+#define IDLE_TIMEOUT_DEFAULT 900
 #define POLL_INTERVAL_DEFAULT 5
 #define MAX_INPUT_DEVS 64
 
